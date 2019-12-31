@@ -1,9 +1,15 @@
+#include <vector>
+#include <cmath>
+#include <limits>
 #include <algorithm>
 #include "tgaimage.h"
 #include "model.h"
+#include "geometry.h"
 
 const int width = 800;
 const int height = 800;
+
+Model* m = NULL;
 
 const TGAColor white = TGAColor(255, 255, 255, 255);
 const TGAColor red   = TGAColor(255, 0,   0,   255);
@@ -93,12 +99,12 @@ Vec3f barycentric(Vec3f *pts,Vec3f p)
 	Vec3f vx = Vec3f(pts[2][0] - pts[0][0], pts[1][0] - pts[0][0], pts[0][0] - p[0]);
 	Vec3f vy = Vec3f(pts[2][1] - pts[0][1], pts[1][1] - pts[0][1], pts[0][1] - p[1]);
 
-	Vec3f bc = cross(vx, vy);
+	Vec3f bc = cross(vx,vy);
 
 	if (std::abs(bc[2]) < 1) return Vec3f(-1, 1, 1);
 	return Vec3f(1.f - (bc.x + bc.y) / bc.z, bc.y / bc.z, bc.x / bc.z);
 }
-void triangle(Vec3f *pts,float *z_buffer,TGAImage &image,float intensity)
+void triangle(Vec3f *pts,Vec2i *uv_pts,float *z_buffer,TGAImage &image,float intensity)
 {
 	Vec2f bbox_min = Vec2f(image.get_width() - 1.f, image.get_height() - 1.f);
 	Vec2f bbox_max = Vec2f(0.f, 0.f);
@@ -127,7 +133,13 @@ void triangle(Vec3f *pts,float *z_buffer,TGAImage &image,float intensity)
 			if (z_buffer[ (int)(p.x + p.y* width) ] < p.z)
 			{
 				z_buffer[ (int)(p.x + p.y * width) ] = p.z;
-				image.set((int)p.x, (int)p.y, TGAColor(intensity * 255, intensity * 255, intensity * 255, 255));
+
+				float x = bc * Vec3f(uv_pts[0][0], uv_pts[1][0], uv_pts[2][0]);
+				float y = bc * Vec3f(uv_pts[0][1], uv_pts[1][1], uv_pts[2][1]);
+
+				auto color = m->diffuse(Vec2i(x,y));
+
+				image.set(p.x, p.y, TGAColor(intensity * color.bgra[2], intensity * color.bgra[1], intensity * color.bgra[0], 255));
 			}		
 		}
 	}
@@ -136,7 +148,7 @@ void triangle(Vec3f *pts,float *z_buffer,TGAImage &image,float intensity)
 int main(int argc, char** argv) 
 {
 	TGAImage image(width, height, TGAImage::RGB);
-	Model m = Model("obj/african_head.obj");
+	m = new Model("obj/african_head/african_head.obj");
 
 	Vec3f light_dir(0, 0, -1);
 
@@ -146,27 +158,31 @@ int main(int argc, char** argv)
 		z_buffer[i] = -std::numeric_limits<float>::max();
 	}
 
-	for (int i = 0; i < m.nfaces(); i++)
+	for (int i = 0; i < m->nfaces(); i++)
 	{
-		std::vector<int> face = m.face(i);
+		std::vector<int> face = m->face(i);
 
 		Vec3f world_co[3];
 		Vec3f screen_co[3];
 		
+		Vec2i text_co[3];
+
 		for (int j = 0; j < 3; j++)
 		{
-			world_co[j] = m.vert(face[j]);
-			screen_co[j] = Vec3f( int((world_co[j].x + 1.) * (width / 2)) , int((world_co[j].y + 1.) * (height / 2)), m.vert(face[j]).z);
+			world_co[j] = m->vert(face[j]);
+			screen_co[j] = Vec3f( int((world_co[j].x + 1.) * (width / 2)) , int((world_co[j].y + 1.) * (height / 2)), m->vert(face[j]).z);
+
+			text_co[j] = m->uv(i, j);
 		}
 
-		Vec3f normal = cross(Vec3f(world_co[2] - world_co[0]) ,Vec3f(world_co[1] - world_co[0]));
+		Vec3f normal = cross(Vec3f(world_co[2] - world_co[0]) , Vec3f(world_co[1] - world_co[0]));
 		normal.normalize();
 
 		float intensity = normal * light_dir;
 
 		if (intensity > 0)
 		{
-			triangle(screen_co, z_buffer, image, intensity);
+			triangle(screen_co,text_co ,z_buffer, image, intensity);
 		}
 	}
 
