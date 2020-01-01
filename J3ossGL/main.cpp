@@ -10,9 +10,10 @@ const int width = 800;
 const int height = 800;
 
 Model* m = NULL;
+float* z_buffer = NULL;
 
-const TGAColor white = TGAColor(255, 255, 255, 255);
-const TGAColor red   = TGAColor(255, 0,   0,   255);
+Vec3f camera(0, 0, 3);
+Vec3f light_dir(0, 0, -1);
 
 void cpu_optimized_triangle(Vec2i v0, Vec2i v1, Vec2i v2, TGAImage& image, TGAColor color){
 	if (v0.y == v1.y && v0.y == v2.y) return;                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
@@ -139,10 +140,22 @@ void triangle(Vec3f *pts,Vec2i *uv_pts,float *z_buffer,TGAImage &image,float int
 
 				auto color = m->diffuse(Vec2i(x,y));
 
-				image.set(p.x, p.y, TGAColor(intensity * color.bgra[2], intensity * color.bgra[1], intensity * color.bgra[0], 255));
+				image.set(p.x, p.y, TGAColor(intensity * color.r, intensity * color.g, intensity * color.b, 255));
 			}		
 		}
 	}
+}
+
+Vec3f m2v(Matrix m) {
+	return Vec3f(m[0][0] / m[3][0], m[1][0] / m[3][0], m[2][0] / m[3][0]);
+}
+Matrix v2m(Vec3f v) {
+	Matrix m = Matrix::identity();
+	m[0][0] = v.x;
+	m[1][0] = v.y;
+	m[2][0] = v.z;
+	m[3][0] = 1.f;
+	return m;
 }
 
 int main(int argc, char** argv) 
@@ -150,9 +163,10 @@ int main(int argc, char** argv)
 	TGAImage image(width, height, TGAImage::RGB);
 	m = new Model("obj/african_head/african_head.obj");
 
-	Vec3f light_dir(0, 0, -1);
+	Matrix projection = Matrix::identity();
+	projection[3][2] = -1.f / camera.z;
 
-	float* z_buffer = new float[width * height];
+	z_buffer = new float[width * height];
 	for (int i = 0; i < width*height; i++)
 	{
 		z_buffer[i] = -std::numeric_limits<float>::max();
@@ -164,15 +178,14 @@ int main(int argc, char** argv)
 
 		Vec3f world_co[3];
 		Vec3f screen_co[3];
-		
 		Vec2i text_co[3];
 
 		for (int j = 0; j < 3; j++)
 		{
 			world_co[j] = m->vert(face[j]);
-			screen_co[j] = Vec3f( int((world_co[j].x + 1.) * (width / 2)) , int((world_co[j].y + 1.) * (height / 2)), m->vert(face[j]).z);
 
-			text_co[j] = m->uv(i, j);
+			screen_co[j] = m2v(projection * v2m(world_co[j]));
+			screen_co[j] = Vec3f( int((screen_co[j].x + 1.) * (width / 2)) , int((screen_co[j].y + 1.) * (height / 2)), m->vert(face[j]).z);
 		}
 
 		Vec3f normal = cross(Vec3f(world_co[2] - world_co[0]) , Vec3f(world_co[1] - world_co[0]));
@@ -182,6 +195,10 @@ int main(int argc, char** argv)
 
 		if (intensity > 0)
 		{
+			for (int j = 0; j < 3; j++)
+			{
+				text_co[j] = m->uv(i, j);
+			}
 			triangle(screen_co,text_co ,z_buffer, image, intensity);
 		}
 	}
