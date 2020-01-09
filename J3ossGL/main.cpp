@@ -1,165 +1,105 @@
-#include <vector>
-#include <cmath>
-#include <limits>
-#include <algorithm>
+#include <windows.h>
+#include <thread>
+#include <chrono>
 
-#include "tgaimage.h"
-#include "model.h"
-#include "geometry.h"
+#include"window_util.h"
+#include "render.h"
 
-const int width = 800;
-const int height = 800;
-const int depth = 255;
+bool isDone = 0;
 
-Model* m = NULL;
-int* z_buffer = NULL;
+HWND hwnd;
+PAINTSTRUCT ps;
+HDC hdc;
+std::thread *Threadupdate;
 
-Vec3f camera(0, 0, 3);
-Vec3f center(0, 0, 0);
-Vec3f light_dir(0, 0, -1);
-Vec3f up(0, 1, 0);
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+void Update();
 
-Matrix ViewPort(int x, int y, int w, int h) {
-	Matrix m = Matrix::identity();
-	m[0][3] = x + w / 2.f;
-	m[1][3] = y + h / 2.f;
-	m[2][3] = depth / 2.f;
-
-	m[0][0] = w / 2.f;
-	m[1][1] = h / 2.f;
-	m[2][2] = depth / 2.f;
-	return m;
-}
-Matrix ModelView(Vec3f camera, Vec3f center, Vec3f up) {
-	Vec3f z = (camera - center).normalize();
-	Vec3f x = cross(up, z).normalize();
-	Vec3f y = cross(z, x).normalize();
-	Matrix m_inv = Matrix::identity();
-	Matrix tr = Matrix::identity();
-	for (int i = 0; i < 3; i++) {
-		m_inv[0][i] = x[i];
-		m_inv[1][i] = y[i];
-		m_inv[2][i] = z[i];
-		tr[i][3] = -center[i];
-	}
-	return m_inv * tr;
-}
-Matrix V2M(Vec3f v) {
-	Matrix m = Matrix::identity();
-	m[0][0] = v.x;
-	m[1][0] = v.y;
-	m[2][0] = v.z;
-	m[3][0] = 1.f;
-	return m;
-}
-Vec3f M2V(Matrix m) {
-	return Vec3f(m[0][0] / m[3][0], m[1][0] / m[3][0], m[2][0] / m[3][0]);
-}
-
-Vec3f Barycentric(Vec3i *pts,Vec3f p)
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR pCmdLine, int nCmdShow)
 {
-	Vec3f vx = Vec3f(pts[2][0] - pts[0][0], pts[1][0] - pts[0][0], pts[0][0] - p[0]);
-	Vec3f vy = Vec3f(pts[2][1] - pts[0][1], pts[1][1] - pts[0][1], pts[0][1] - p[1]);
+	// Register the window class.
+	const wchar_t CLASS_NAME[] = L"J3ossGL";
+	WNDCLASS wc = { };
+	wc.lpfnWndProc = WindowProc;
+	wc.hInstance = hInstance;
+	wc.lpszClassName = CLASS_NAME;
+	RegisterClass(&wc);
 
-	Vec3f bc = cross(vx,vy);
+	// Create the window.
+	hwnd = CreateWindowEx(
+		0,								// Optional window styles.
+		CLASS_NAME,                     // Window class
+		L"J3ossGL",						// Window text
+		WS_OVERLAPPEDWINDOW,            // Window style
 
-	if (std::abs(bc[2]) < 1) return Vec3f(-1, 1, 1);
-	return Vec3f(1.f - (bc.x + bc.y) / bc.z, bc.y / bc.z, bc.x / bc.z);
-}
-void Triangle(Vec3i *pts,Vec2i *uv_pts,int *z_buffer,TGAImage &image,float intensity)
-{
-	Vec2i bbox_min = Vec2f(image.get_width() - 1, image.get_height() - 1);
-	Vec2i bbox_max = Vec2f(0, 0);
-	Vec2i clamp(image.get_width() - 1, image.get_height() - 1);
+		// Size and position
+		0, 0, width, height,
 
-	for (int i = 0; i < 3; i++)
+		NULL,       // Parent window    
+		NULL,       // Menu
+		hInstance,  // Instance handle
+		NULL        // Additional application data
+	);
+
+	ShowWindow(hwnd, nCmdShow);
+
+	hdc = BeginPaint(hwnd, &ps);
+
+	std::thread Thread(Update);
+	Threadupdate = &Thread;
+
+	// Run the message loop.
+	MSG msg = { };
+	while (GetMessage(&msg, NULL, 0, 0))
 	{
-		for (int j = 0; j < 2; j++)
-		{
-			bbox_min[j] = std::max(0, std::min(bbox_min[j], pts[i][j]));
-			bbox_max[j] = std::min(clamp[j], std::max(bbox_max[j], pts[i][j]));
-		}
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
 	}
 
-	Vec3i p;
-	for (p.x = bbox_min.x; p.x <= bbox_max.x; p.x++)
-	{
-		for (p.y = bbox_min.y; p.y <= bbox_max.y; p.y++)
-		{
-			Vec3f bc = Barycentric(pts, p);
-
-			if (bc.x < 0 || bc.y < 0 || bc.z < 0) continue;
-
-			p.z = bc * Vec3f(pts[0][2], pts[1][2], pts[2][2]);
-
-			if (z_buffer[ (int)(p.x + p.y* width) ] < p.z)
-			{
-				z_buffer[ (int)(p.x + p.y * width) ] = p.z;
-
-				float x = bc * Vec3f(uv_pts[0][0], uv_pts[1][0], uv_pts[2][0]);
-				float y = bc * Vec3f(uv_pts[0][1], uv_pts[1][1], uv_pts[2][1]);
-
-				auto color = m->diffuse(Vec2i(x,y));
-
-				image.set(p.x, p.y, TGAColor(intensity * color.r, intensity * color.g, intensity * color.b, 255));
-			}		
-		}
-	}
-}
-
-int main(int argc, char** argv) 
-{
-	TGAImage image(width, height, TGAImage::RGB);
-	m = new Model("obj/african_head/african_head.obj");
-
-	Matrix model = Matrix::identity();	//can be used to setup the scene
-	model[2][3] = -5;
-
-	Matrix model_view = ModelView(camera, center, up);
-
-	Matrix projection = Matrix::identity();
-	projection[3][2] = -1.f / camera.z-center.z;
-
-	Matrix view_port = ViewPort(width / 8, height / 8, width * 3 / 4, height * 3 / 4);
-
-	Matrix z = (view_port * projection * model_view * model);
-
-	z_buffer = new int[width * height];
-	for (int i = 0; i < width*height; i++)
-	{
-		z_buffer[i] = std::numeric_limits<int>::min();
-	}
-
-	for (int i = 0; i < m->nfaces(); i++)
-	{
-		std::vector<int> face = m->face(i);
-
-		Vec3f world_co[3];
-		Vec3i screen_co[3];
-		Vec2i text_co[3];
-
-		for (int j = 0; j < 3; j++)
-		{
-			world_co[j] = m->vert(face[j]);
-			screen_co[j] = M2V(z * V2M(world_co[j]));
-		}
-
-		Vec3f normal = cross(Vec3f(world_co[2] - world_co[0]) , Vec3f(world_co[1] - world_co[0]));
-		normal.normalize();
-
-		float intensity = normal * light_dir;
-
-		if (intensity > 0)
-		{
-			for (int j = 0; j < 3; j++)
-			{
-				text_co[j] = m->uv(i, j);
-			}
-			Triangle(screen_co,text_co ,z_buffer, image, intensity);
-		}
-	}
-
-	image.flip_vertically();
-	image.write_tga_file("output.tga");
 	return 0;
+}
+
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+		case WM_DESTROY:
+			isDone = 1;
+			Threadupdate->join();
+			PostQuitMessage(0);
+			return 0;
+
+		case WM_PAINT:
+		{
+			FillRect(BeginPaint(hwnd, &ps), &ps.rcPaint, (HBRUSH)(COLOR_WINDOW + 1));
+			EndPaint(hwnd, &ps);
+			return 0;
+		}
+	}
+	return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
+void Update()
+{
+	BITMAPINFO bmi;
+	ZeroMemory(&bmi, sizeof(bmi));
+	BITMAPINFOHEADER& h = bmi.bmiHeader;
+	h.biSize = sizeof(BITMAPINFOHEADER);
+	h.biWidth = width;
+	h.biHeight = -height;
+	h.biPlanes = 1;
+	h.biBitCount = 32;
+	h.biCompression = BI_RGB;
+	h.biSizeImage = width * height;
+
+	while (!isDone)
+	{
+		auto start = std::chrono::high_resolution_clock::now();
+
+
+		SetDIBitsToDevice(hdc, 0, 0, width, height, 0, 0, 0, height, render(), &bmi, DIB_RGB_COLORS);
+
+		auto stop = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+	}
 }
